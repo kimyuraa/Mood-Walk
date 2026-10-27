@@ -2,6 +2,7 @@
 # 입력 : data/processed/segments.gpkg            (make_segments.py)
 #        data/processed/osm_water_clean.gpkg     (clean_osm_water.py)
 #        data/processed/parks_seoul_clean.csv    (clean_parks.py)
+#        data/processed/osm_green_clean.gpkg     (fetch_osm_green.py)
 #        data/processed/subway_seoul_clean.csv   (clean_subway.py)
 #        data/raw/ddareungi_stations.xlsx
 # 출력 : data/processed/segment_features.csv / segment_features.gpkg
@@ -26,15 +27,17 @@ def to_points(df, lat, lon):
 seg = gpd.read_file("data/processed/segments.gpkg", layer="segments").to_crs(5179)
 print("구간:", len(seg))
 
-# 1) 물가: 가장 가까운 물까지 거리, 100m 안에 있는 구간 비율
+# 1) 물가: 큰 물(강, 수로, 큰 면)과 개울을 나눠서 계산
 wl = gpd.read_file("data/processed/osm_water_clean.gpkg", layer="lines")
 wp = gpd.read_file("data/processed/osm_water_clean.gpkg", layer="polygons")
-water = unary_union(list(wl.geometry) + list(wp.geometry))
-water_near = water.buffer(WATER_NEAR_M)
-seg["water_dist_m"] = seg.geometry.distance(water).round(0)
-seg["water_frac_100m"] = [
-    round(g.intersection(water_near).length / g.length, 3) for g in seg.geometry
-]
+big_water = unary_union(list(wl[wl["waterway"].isin(["river", "canal"])].geometry) + list(wp.geometry))
+streams = unary_union(list(wl[wl["waterway"] == "stream"].geometry))
+for name, geom in [("water_big", big_water), ("stream", streams)]:
+    near = geom.buffer(WATER_NEAR_M)
+    seg[f"{name}_dist_m"] = seg.geometry.distance(geom).round(0)
+    seg[f"{name}_frac_100m"] = [
+        round(g.intersection(near).length / g.length, 3) for g in seg.geometry
+    ]
 
 # 2) 공원: 코스 300m 안 공원 개수, 큰 공원 녹지 비율
 parks = pd.read_csv("data/processed/parks_seoul_clean.csv")
@@ -50,6 +53,12 @@ big = pg[pg["parkAr"] >= BIG_PARK_M2]
 circles = [p.buffer(float(np.sqrt(a / np.pi))) for p, a in zip(big.geometry, big["parkAr"])]
 green = unary_union(circles)
 seg["green_ratio_300m"] = [round(min(1.0, b.intersection(green).area / b.area), 3) for b in buf]
+
+# 2-b) 숲: OSM 숲 면적. 코스 위가 숲인 비율 + 코스 300m 안을 숲이 덮는 비율
+gp = gpd.read_file("data/processed/osm_green_clean.gpkg", layer="polygons")
+forest = unary_union(list(gp.geometry))
+seg["forest_on_trail"] = [round(g.intersection(forest).length / g.length, 3) for g in seg.geometry]
+seg["forest_ratio_300m"] = [round(min(1.0, b.intersection(forest).area / b.area), 3) for b in buf]
 
 # 3) 지하철역
 st = to_points(pd.read_csv("data/processed/subway_seoul_clean.csv"), "lat", "lon")
@@ -80,12 +89,16 @@ seg.drop(columns="geometry").to_csv(
     "data/processed/segment_features.csv", index=False, encoding="utf-8-sig")
 seg.to_file("data/processed/segment_features.gpkg", layer="segments", driver="GPKG")
 
-feat = ["water_dist_m", "water_frac_100m", "park_cnt_300m", "green_ratio_300m",
-        "subway_dist_m", "subway_cnt_500m", "bike_dist_m", "bike_cnt_500m"]
+feat = ["water_big_dist_m", "water_big_frac_100m", "stream_dist_m", "stream_frac_100m",
+        "park_cnt_300m", "green_ratio_300m",
+        "forest_on_trail", "forest_ratio_300m", "subway_dist_m", "subway_cnt_500m", "bike_dist_m", "bike_cnt_500m"]
 print("\n== 새 변수 요약 ==")
 print(seg[feat].describe().round(2).to_string())
 print("\n== 코스별 평균 ==")
 print(seg.groupby("course")[feat].mean().round(2).to_string())
-print("\n물가 100m 안에 닿는 구간:", int((seg.water_dist_m <= WATER_NEAR_M).sum()), "/", len(seg))
+print("\n큰 물 100m 안에 닿는 구간:", int((seg.water_big_dist_m <= WATER_NEAR_M).sum()), "/", len(seg))
+print("개울 100m 안에 닿는 구간:", int((seg.stream_dist_m <= WATER_NEAR_M).sum()), "/", len(seg))
 print("녹지 비율 0인 구간:", int((seg.green_ratio_300m == 0).sum()), "/", len(seg))
+print("숲 비율(300m) 0인 구간:", int((seg.forest_ratio_300m == 0).sum()), "/", len(seg))
+print("코스 위 절반 이상이 숲인 구간:", int((seg.forest_on_trail >= 0.5).sum()), "/", len(seg))
 print("저장 완료: data/processed/segment_features.csv")
