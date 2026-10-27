@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-K = 4           # 군집 수. 아래 k 탐색 결과를 보고 바꿔도 돼 (임시 기준)
+K = 5          # 군집 수. 아래 k 탐색 결과를 보고 바꿔도 돼 (임시 기준)
 SEED = 42
 os.makedirs("reports/figures", exist_ok=True)
 
