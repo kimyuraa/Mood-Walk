@@ -5,3 +5,4 @@ __pycache__/
 osm_water.gpkg
 cache/
 *.gpkg
+reports/
